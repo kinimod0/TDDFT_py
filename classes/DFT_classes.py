@@ -2,6 +2,7 @@ import numpy as np
 import scipy.sparse.linalg as ssla
 import scipy.sparse as ssp
 from scipy.ndimage import convolve
+import scipy.linalg as sla
 
 from ._DFT import DFT_base
 from .Functionals import LDA
@@ -63,16 +64,57 @@ class DFT_1D(DFT_base):
     def SCF(self):
         if self.psi is None:
             self.solve()
-        energy_diff = 1.0
-        while energy_diff > self.tol:
+        f_i_norm = 1.0
+        SC_scheme = Pulay(self.psi.shape[0])
+        while f_i_norm > self.tol:
             dens_old = self.prob_dens.copy()
-            energy_old = self.energies.sum()
             self.solve()
-            R_dens = self.prob_dens - dens_old
-            self.prob_dens = dens_old + 0.1 * R_dens
-            energy_diff = np.abs(self.energies.sum() - energy_old)
-            print(energy_diff)
-            
+            f_i = self.prob_dens - dens_old
+            f_i_norm = sla.norm(f_i)
+            self.prob_dens = SC_scheme.cycle(f_i, dens_old)
+        print('# of iterations {}'.format(SC_scheme.iter))
+        
+class Pulay:
+    def __init__(self, size, n = 5, k = 3, alpha = 0.05):
+        self.size  = size
+        self.n     = n
+        self.k     = k
+        self.alpha = alpha
+        self.R = np.empty((size, n), dtype = np.float64)
+        self.F = np.empty((size, n), dtype = np.float64)
+        self.iter = 0
+        self.f_old = np.zeros(size, dtype = np.float64)
+        self.rho_old = np.zeros(size, dtype = np.float64)
+
+    def cycle(self, f_rho, rho):
+        if self.iter < self.n:
+            rho_new = rho + self.alpha * f_rho
+            self.F[:, self.iter] = f_rho - self.f_old
+            self.R[:, self.iter] = rho_new - self.rho_old
+        elif (self.iter + 1) % self.k != 0:
+            rho_new = rho + self.alpha * f_rho
+            self.F[:, :-1] = self.F[:, 1:]
+            self.R[:, :-1] = self.R[:, 1:]
+            self.F[:, -1] = f_rho - self.f_old
+            self.R[:, -1] = rho_new - self.rho_old
+        else:
+            F_T = self.F.T
+            C_nlin = (self.R + self.alpha * self.F).dot(sla.inv(F_T.dot(self.F))).dot(F_T)
+            rho_new = rho + self.alpha * f_rho - C_nlin.dot(f_rho)
+            self.F[:, :-1] = self.F[:, 1:]
+            self.R[:, :-1] = self.R[:, 1:]
+            self.F[:, -1] = f_rho - self.f_old
+            self.R[:, -1] = rho_new - self.rho_old
+
+        self.iter += 1
+        print(np.linalg.norm(f_rho))
+
+        self.f_old = f_rho
+        self.rho_old = rho_new
+        return rho_new
+
+
+
 
 
 
